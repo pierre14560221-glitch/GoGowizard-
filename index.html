@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>SAI Rescue Flight</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <style>
+    html,
+    body {
+      margin: 0;
+      min-height: 100%;
+      background: #0c2033;
+      color: #ffffff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      box-sizing: border-box;
+    }
+
+    .game {
+      width: min(100%, 960px);
+    }
+
+    canvas {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      display: block;
+      background: #0c2033;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 20px;
+      image-rendering: pixelated;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+      touch-action: manipulation;
+    }
+
+    .help {
+      margin: 10px 0 0;
+      font-size: 14px;
+      line-height: 1.5;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+
+<body>
+  <main class="game">
+    <canvas id="game" width="160" height="120"></canvas>
+    <p class="help">
+      Space / A / ↑ / Click / Tap：浮上<br>
+      ライフ3：END 01　ライフ2：END 02　ライフ1：END 03
+    </p>
+  </main>
+
+  <script>
+    "use strict";
+
+    const CONFIG = {
+      width: 160,
+      height: 120,
+
+      playerX: 30,
+      playerSize: 16,
+      playerHitRadius: 6,
+
+      gravity: 500,
+      flapVelocity: -130,
+      maxFallSpeed: 220,
+
+      obstacleWidth: 24,
+      obstacleHeight: 160,
+      obstacleGapHeight: 40,
+      obstacleSpeed: 35,
+      obstacleInterval: 1500,
+
+      maxLives: 3,
+      invincibleMs: 900,
+      clearScore: 12
+    };
+
+    const ASSETS = {
+      player: "assets/player.png",
+      obstacle: "assets/obstacle.png"
+    };
+
+    const ENDING_BY_LIVES = {
+      3: "END_01_NO_MISS",
+      2: "END_02_LIGHT_DAMAGE",
+      1: "END_03_CRITICAL_DAMAGE"
+    };
+
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+
+    const game = {
+      state: "ready",
+      player: {
+        x: CONFIG.playerX,
+        y: 60,
+        vy: 0
+      },
+      obstacles: [],
+      lives: CONFIG.maxLives,
+      score: 0,
+      lastTime: 0,
+      lastObstacleTime: 0,
+      invincibleUntil: 0,
+      result: null,
+      assets: {
+        player: null,
+        obstacle: null
+      }
+    };
+
+    Promise.all([
+      loadImage(ASSETS.player),
+      loadImage(ASSETS.obstacle)
+    ]).then(([playerImage, obstacleImage]) => {
+      game.assets.player = playerImage;
+      game.assets.obstacle = obstacleImage;
+      requestAnimationFrame(loop);
+    });
+
+    function loadImage(src) {
+      return new Promise((resolve) => {
+        const image = new Image();
+
+        image.onload = () => resolve(image);
+        image.onerror = () => resolve(null);
+        image.src = src;
+      });
+    }
+
+    function resetGame() {
+      game.state = "ready";
+      game.player.x = CONFIG.playerX;
+      game.player.y = 60;
+      game.player.vy = 0;
+      game.obstacles = [];
+      game.lives = CONFIG.maxLives;
+      game.score = 0;
+      game.lastObstacleTime = 0;
+      game.invincibleUntil = 0;
+      game.result = null;
+    }
+
+    function startGame() {
+      if (game.state !== "ready") return;
+
+      game.state = "playing";
+      game.player.vy = CONFIG.flapVelocity;
+      game.lastObstacleTime = performance.now();
+    }
+
+    function flap() {
+      if (game.state === "ready") {
+        startGame();
+        return;
+      }
+
+      if (game.state === "clear" || game.state === "gameover") {
+        resetGame();
+        return;
+      }
+
+      game.player.vy = CONFIG.flapVelocity;
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (!["Space", "KeyA", "ArrowUp"].includes(event.code)) return;
+
+      event.preventDefault();
+      flap();
+    });
+
+    canvas.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      flap();
+    });
+
+    function loop(time) {
+      const dt = Math.min((time - game.lastTime) / 1000 || 0, 1 / 30);
+      game.lastTime = time;
+
+      update(dt, time);
+      draw(time);
+
+      requestAnimationFrame(loop);
+    }
+
+    function update(dt, time) {
+      if (game.state !== "playing") return;
+
+      updatePlayer(dt);
+
+      if (time - game.lastObstacleTime >= CONFIG.obstacleInterval) {
+        spawnObstacle();
+        game.lastObstacleTime = time;
+      }
+
+      updateObstacles(dt);
+      checkScore();
+      checkCollisions(time);
+      checkClear();
+    }
+
+    function updatePlayer(dt) {
+      game.player.vy = Math.min(
+        game.player.vy + CONFIG.gravity * dt,
+        CONFIG.maxFallSpeed
+      );
+
+      game.player.y += game.player.vy * dt;
+
+      if (game.player.y < 0 || game.player.y > CONFIG.height) {
+        damagePlayer(performance.now());
+      }
+    }
+
+    function spawnObstacle() {
+      const centerY = randomInt(45, 75);
+
+      game.obstacles.push({
+        x: CONFIG.width + CONFIG.obstacleWidth,
+        centerY,
+        passed: false
+      });
+    }
+
+    function updateObstacles(dt) {
+      for (const obstacle of game.obstacles) {
+        obstacle.x -= CONFIG.obstacleSpeed * dt;
+      }
+
+      game.obstacles = game.obstacles.filter((obstacle) => {
+        return obstacle.x + CONFIG.obstacleWidth > -10;
+      });
+    }
+
+    function checkScore() {
+      for (const obstacle of game.obstacles) {
+        if (obstacle.passed) continue;
+
+        if (obstacle.x + CONFIG.obstacleWidth < game.player.x) {
+          obstacle.passed = true;
+          game.score += 1;
+        }
+      }
+    }
+
+    function checkCollisions(time) {
+      if (time < game.invincibleUntil) return;
+
+      const player = {
+        x: game.player.x,
+        y: game.player.y,
+        r: CONFIG.playerHitRadius
+      };
+
+      for (const obstacle of game.obstacles) {
+        const solidRects = getObstacleSolidRects(obstacle);
+
+        for (const rect of solidRects) {
+          if (circleIntersectsRect(player, rect)) {
+            damagePlayer(time);
+            return;
+          }
+        }
+      }
+    }
+
+    function getObstacleSolidRects(obstacle) {
+      const topY = obstacle.centerY - CONFIG.obstacleHeight / 2;
+      const gapTop = obstacle.centerY - CONFIG.obstacleGapHeight / 2;
+      const gapBottom = obstacle.centerY + CONFIG.obstacleGapHeight / 2;
+
+      return [
+        {
+          x: obstacle.x,
+          y: topY,
+          width: CONFIG.obstacleWidth,
+          height: gapTop - topY
+        },
+        {
+          x: obstacle.x,
+          y: gapBottom,
+          width: CONFIG.obstacleWidth,
+          height: topY + CONFIG.obstacleHeight - gapBottom
+        }
+      ];
+    }
+
+    function damagePlayer(time) {
+      if (time < game.invincibleUntil) return;
+
+      game.lives -= 1;
+
+      if (game.lives <= 0) {
+        finishGame("GAME_OVER");
+        return;
+      }
+
+      game.invincibleUntil = time + CONFIG.invincibleMs;
+      game.player.vy = CONFIG.flapVelocity;
+      game.player.y = clamp(game.player.y, 8, CONFIG.height - 8);
+    }
+
+    function checkClear() {
+      if (game.score < CONFIG.clearScore) return;
+
+      finishGame(ENDING_BY_LIVES[game.lives]);
+    }
+
+    function finishGame(resultId) {
+      game.state = resultId === "GAME_OVER" ? "gameover" : "clear";
+      game.result = {
+        endingId: resultId,
+        lives: game.lives,
+        score: game.score
+      };
+
+      window.lastGameResult = game.result;
+      window.dispatchEvent(new CustomEvent("saiFlightResult", {
+        detail: game.result
+      }));
+    }
+
+    function draw(time) {
+      drawBackground();
+      drawObstacles();
+      drawPlayer(time);
+      drawHud();
+      drawOverlay();
+    }
+
+    function drawBackground() {
+      ctx.fillStyle = "#181827";
+      ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
+
+      ctx.fillStyle = "#22233a";
+      for (let i = 0; i < 9; i += 1) {
+        const x = (i * 24 + Math.floor(performance.now() / 80)) % 190 - 30;
+
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x + 8, 0);
+        ctx.lineTo(x + 4, 14 + (i % 3) * 6);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.moveTo(x + 12, CONFIG.height);
+        ctx.lineTo(x + 22, CONFIG.height);
+        ctx.lineTo(x + 17, CONFIG.height - 14 - (i % 3) * 6);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+
+    function drawObstacles() {
+      for (const obstacle of game.obstacles) {
+        const topY = obstacle.centerY - CONFIG.obstacleHeight / 2;
+
+        if (game.assets.obstacle) {
+          ctx.drawImage(
+            game.assets.obstacle,
+            obstacle.x,
+            topY,
+            CONFIG.obstacleWidth,
+            CONFIG.obstacleHeight
+          );
+        } else {
+          drawFallbackObstacle(obstacle);
+        }
+      }
+    }
+
+    function drawFallbackObstacle(obstacle) {
+      const rects = getObstacleSolidRects(obstacle);
+
+      ctx.fillStyle = "#6c6375";
+      ctx.strokeStyle = "#3e3948";
+      ctx.lineWidth = 2;
+
+      for (const rect of rects) {
+        ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+        ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+      }
+    }
+
+    function drawPlayer(time) {
+      const blink = game.invincibleUntil > time && Math.floor(time / 90) % 2 === 0;
+      if (blink) return;
+
+      if (game.assets.player) {
+        ctx.drawImage(
+          game.assets.player,
+          game.player.x - CONFIG.playerSize / 2,
+          game.player.y - CONFIG.playerSize / 2,
+          CONFIG.playerSize,
+          CONFIG.playerSize
+        );
+        return;
+      }
+
+      ctx.fillStyle = "#efe8d2";
+      ctx.beginPath();
+      ctx.arc(game.player.x, game.player.y, CONFIG.playerHitRadius, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "#8c7452";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(game.player.x - 12, game.player.y + 7);
+      ctx.lineTo(game.player.x + 13, game.player.y + 7);
+      ctx.stroke();
+    }
+
+    function drawHud() {
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "8px sans-serif";
+      ctx.fillText("SCORE " + game.score, 5, 10);
+      ctx.fillText("LIFE " + game.lives, 120, 10);
+    }
+
+    function drawOverlay() {
+      if (game.state === "playing") return;
+
+      ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+      ctx.fillRect(0, 0, CONFIG.width, CONFIG.height);
+
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#ffffff";
+
+      if (game.state === "ready") {
+        ctx.font = "12px sans-serif";
+        ctx.fillText("SAI RESCUE FLIGHT", 80, 52);
+        ctx.font = "7px sans-serif";
+        ctx.fillText("A / Space / Click で開始", 80, 68);
+      }
+
+      if (game.state === "gameover") {
+        ctx.font = "14px sans-serif";
+        ctx.fillText("GAME OVER", 80, 54);
+        ctx.font = "7px sans-serif";
+        ctx.fillText("A / Space / Click でやり直し", 80, 70);
+      }
+
+      if (game.state === "clear") {
+        ctx.font = "14px sans-serif";
+        ctx.fillText(getEndTitle(game.lives), 80, 50);
+        ctx.font = "7px sans-serif";
+        ctx.fillText("残りライフ " + game.lives, 80, 66);
+        ctx.fillText("A / Space / Click でやり直し", 80, 78);
+      }
+
+      ctx.textAlign = "left";
+    }
+
+    function getEndTitle(lives) {
+      if (lives === 3) return "END 01";
+      if (lives === 2) return "END 02";
+      if (lives === 1) return "END 03";
+      return "CLEAR";
+    }
+
+    function circleIntersectsRect(circle, rect) {
+      const closestX = clamp(circle.x, rect.x, rect.x + rect.width);
+      const closestY = clamp(circle.y, rect.y, rect.y + rect.height);
+      const dx = circle.x - closestX;
+      const dy = circle.y - closestY;
+
+      return dx * dx + dy * dy < circle.r * circle.r;
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function randomInt(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+  </script>
+</body>
+</html>
+
