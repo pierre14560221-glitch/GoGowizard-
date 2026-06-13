@@ -51,8 +51,9 @@
   <main class="game">
     <canvas id="game" width="160" height="120"></canvas>
     <p class="help">
-      Space / A / ↑ / Click / Tap：浮上<br>
-      ライフ3：END 01　ライフ2：END 02　ライフ1：END 03
+      Tap / Click：浮上<br>
+      ライフは3つ　何とか洞窟のすき間を縫って龍水を助けに行こう！
+	残りライフによってエンディングが変わります
     </p>
   </main>
 
@@ -67,24 +68,23 @@
       playerSize: 16,
       playerHitRadius: 6,
 
-      gravity: 500,
+      gravity: 400,
       flapVelocity: -130,
       maxFallSpeed: 220,
 
       obstacleWidth: 24,
       obstacleHeight: 160,
-      obstacleGapHeight: 40,
+      obstacleGapHeight: 50,
       obstacleSpeed: 35,
       obstacleInterval: 1500,
 
       maxLives: 3,
-      invincibleMs: 900,
-      clearScore: 12
+      invincibleMs: 1000,
     };
 
     const ASSETS = {
-      player: "assets/player.png",
-      obstacle: "assets/obstacle.png"
+      player: "player.png",
+      obstacle: "obstacle.png"
     };
 
     const ENDING_BY_LIVES = {
@@ -143,7 +143,6 @@
       game.player.vy = 0;
       game.obstacles = [];
       game.lives = CONFIG.maxLives;
-      game.score = 0;
       game.lastObstacleTime = 0;
       game.invincibleUntil = 0;
       game.result = null;
